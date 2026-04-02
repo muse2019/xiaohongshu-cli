@@ -4,49 +4,65 @@
 
 ## 功能
 
-- `xhs feed` — 拉取首页推荐
-- `xhs like <note-id>` — 点赞笔记
-- `xhs collect <note-id>` — 收藏笔记
+- `xhs feed [limit]` — 拉取首页推荐
 - `xhs note <note-id>` — 查看笔记详情
+- 点赞/收藏功能开发中
 
 ## 安装
 
 ```bash
+cd C:\Users\jinmi\projects\xiaohongshu-cli
 npm install
-npm link
 ```
 
 ## 使用
 
-### 点赞
+### 拉取首页推荐
 
 ```bash
-xhs like 69ce4cb80000000021038163
-# 或完整 URL
-xhs like "https://www.xiaohongshu.com/explore/69ce4cb80000000021038163"
+node src/index.js feed 10
 ```
 
-### 收藏
+### 查看笔记详情
 
 ```bash
-xhs collect 69ce4cb80000000021038163
+node src/index.js note 69a8423f000000002202cdee
 ```
 
-### 查看详情
+## 技术实现
 
-```bash
-xhs note 69ce4cb80000000021038163
+### 点赞/收藏按钮选择器
+
+```javascript
+// 点赞按钮
+const likeBtn = document.querySelector('.like-wrapper');
+// 已点赞状态
+likeBtn.classList.contains('like-active');
+
+// 收藏按钮
+const collectBtn = document.querySelector('.collect-wrapper');
+// 已收藏状态
+collectBtn.classList.contains('collect-active');
+
+// 评论按钮
+const chatBtn = document.querySelector('.chat-wrapper');
 ```
 
-## 登录状态
+### 互动容器结构
 
-首次使用会打开浏览器，请登录小红书。登录状态会保存在 `~/.xhs-browser` 目录。
+```
+.interact-container
+  └── .buttons.engage-bar-style
+      ├── .left
+      │   ├── .like-wrapper (点赞)
+      │   ├── .collect-wrapper (收藏)
+      │   └── .chat-wrapper (评论)
+      └── .share-wrapper (分享)
+```
 
-## 技术栈
+## 依赖
 
-- Node.js
-- Playwright
-- Commander.js
+- opencli Browser Bridge（用于浏览器自动化）
 
 ## License
 
