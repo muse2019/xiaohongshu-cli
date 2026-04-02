@@ -1,0 +1,20 @@
+{
+  "name": "xiaohongshu-cli",
+  "version": "1.0.0",
+  "description": "小红书命令行工具 - 点赞/收藏/发布/数据分析",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "xhs": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "keywords": ["xiaohongshu", "cli", "automation"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0",
+    "commander": "^11.0.0"
+  }
+}
