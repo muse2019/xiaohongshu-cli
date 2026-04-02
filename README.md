@@ -5,8 +5,9 @@
 ## 功能
 
 - `xhs feed [limit]` — 拉取首页推荐
+- `xhs like` — 点赞当前页面笔记
+- `xhs collect` — 收藏当前页面笔记
 - `xhs note <note-id>` — 查看笔记详情
-- 点赞/收藏功能开发中
 
 ## 安装
 
@@ -29,9 +30,44 @@ node src/index.js feed 10
 node src/index.js note 69a8423f000000002202cdee
 ```
 
+## 点赞/收藏功能
+
+### 通过 OpenClaw Browser 工具
+
+在 OpenClaw 中连接到你的 Chrome 浏览器（需要已登录小红书）：
+
+```javascript
+// 点赞
+browser action: act, kind: evaluate, profile: user
+fn: () => {
+  const btn = document.querySelector('.like-wrapper');
+  if (!btn) return { success: false, detail: '未找到点赞按钮' };
+  if (btn.classList.contains('like-active')) return { success: false, detail: '之前已点赞' };
+  btn.click();
+  return { success: true, detail: '已点赞' };
+}
+
+// 收藏
+fn: () => {
+  const btn = document.querySelector('.collect-wrapper');
+  if (!btn) return { success: false, detail: '未找到收藏按钮' };
+  if (btn.classList.contains('collect-active')) return { success: false, detail: '之前已收藏' };
+  btn.click();
+  return { success: true, detail: '已收藏' };
+}
+```
+
+### 通过 opencli 命令
+
+```bash
+# 需要在笔记详情页执行
+opencli xiaohongshu like
+opencli xiaohongshu collect
+```
+
 ## 技术实现
 
-### 点赞/收藏按钮选择器
+### 按钮选择器
 
 ```javascript
 // 点赞按钮
@@ -60,9 +96,16 @@ const chatBtn = document.querySelector('.chat-wrapper');
       └── .share-wrapper (分享)
 ```
 
+## 注意事项
+
+1. **自动化检测**：小红书会检测自动化浏览器，直接访问笔记 URL 会被拦截
+2. **解决方案**：通过 OpenClaw 的 browser 工具连接到用户已登录的 Chrome（`profile: user`）
+3. **推荐方式**：从首页点击打开笔记，而不是直接访问笔记 URL
+
 ## 依赖
 
-- opencli Browser Bridge（用于浏览器自动化）
+- OpenClaw Browser Bridge（用于浏览器自动化）
+- Chrome 浏览器（已登录小红书账号）
 
 ## License
 
