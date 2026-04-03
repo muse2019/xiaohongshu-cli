@@ -945,21 +945,27 @@ xiaohongshu
 });
 xiaohongshu
     .command('comment')
-    .argument('[id]', 'Note ID (可选，不填则操作当前页面)')
-    .argument('<text>', '评论内容')
+    .argument('[args...]', 'Note ID + 评论内容，或仅评论内容')
     .description('发表评论（真人行为模拟）')
-    .action(async (id, text) => {
-    // 判断第一个参数是 ID 还是评论内容
-    // 如果第二个参数存在，说明第一个是 ID
-    if (text) {
-        console.log(chalk.dim(`评论笔记 ${id}...`));
-        await daemonClient.navigate(`https://www.xiaohongshu.com/explore/${id}`);
-        await daemonClient.wait(2000);
+    .action(async (args) => {
+    let noteId;
+    let text;
+    if (args.length === 0) {
+        console.log(chalk.red('✗ 请提供评论内容'));
+        return;
+    }
+    else if (args.length === 1) {
+        // 只有一个参数，是评论内容，操作当前页面
+        text = args[0];
+        console.log(chalk.dim('评论当前页面...'));
     }
     else {
-        // 只有一个参数，是评论内容，操作当前页面
-        text = id;
-        console.log(chalk.dim('评论当前页面...'));
+        // 两个参数：ID + 评论
+        noteId = args[0];
+        text = args.slice(1).join(' ');
+        console.log(chalk.dim(`评论笔记 ${noteId}...`));
+        await daemonClient.navigate(`https://www.xiaohongshu.com/explore/${noteId}`);
+        await daemonClient.wait(2000);
     }
     // 使用真人行为评论
     const result = await daemonClient.xhsComment(text);
