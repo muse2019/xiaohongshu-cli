@@ -494,7 +494,7 @@ xiaohongshu
     // 等待滚动完成和页面渲染
     await page.wait(1.5);
 
-    // 第二步：获取卡片位置并用真人行为点击
+    // 第二步：获取卡片位置并用真人行为点击（验证 ID 匹配）
     const position = await page.evaluate(`
       (() => {
         // 使用正确的选择器
@@ -517,9 +517,30 @@ xiaohongshu
           }
         });
 
-        const targetCard = uniqueCards[${(cardInfo as any).foundIndex}];
+        // 优先通过 ID 查找（防止滚动后索引变化）
+        let targetCard = null;
+        for (const card of uniqueCards) {
+          const href = card.getAttribute('href') || '';
+          const match = href.match(/explore\\/([a-f0-9]+)/);
+          if (match && match[1] === '${note.id}') {
+            targetCard = card;
+            break;
+          }
+        }
+
+        // 如果通过 ID 找不到，才使用索引
+        if (!targetCard && ${(cardInfo as any).foundIndex} < uniqueCards.length) {
+          const cardByIndex = uniqueCards[${(cardInfo as any).foundIndex}];
+          // 验证索引对应的卡片 ID
+          const href = cardByIndex?.getAttribute('href') || '';
+          const match = href.match(/explore\\/([a-f0-9]+)/);
+          if (match && match[1] === '${note.id}') {
+            targetCard = cardByIndex;
+          }
+        }
+
         if (!targetCard) {
-          return { success: false, error: '卡片消失' };
+          return { success: false, error: '卡片已变化，请重新运行 feed 命令' };
         }
 
         // 再次滚动到可见
