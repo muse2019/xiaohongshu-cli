@@ -4,7 +4,30 @@ console.log('[XHS Bridge] Service Worker started');
 const DAEMON_PORT = 19826;
 let connected = false;
 let activeTabId = null;
-let useCdpInput = true;  // 使用 CDP 生成可信事件
+
+// ==================== CDP 配置 ====================
+// 混合模式：默认禁用 CDP 避免警告条，用户可按需开启
+let cdpConfig = {
+  enabled: false,           // 是否启用 CDP（会产生警告条）
+  attachedTabs: new Set(),  // 已附加 debugger 的标签页
+};
+
+/**
+ * 配置 CDP 模式
+ * @param {boolean} enabled - 是否启用 CDP（isTrusted=true 事件）
+ */
+function setCdpMode(enabled) {
+  cdpConfig.enabled = enabled;
+  console.log('[XHS Bridge] CDP mode:', enabled ? 'enabled' : 'disabled');
+
+  // 如果禁用，分离所有已附加的 debugger
+  if (!enabled) {
+    for (const tabId of cdpConfig.attachedTabs) {
+      detachDebugger(tabId);
+    }
+    cdpConfig.attachedTabs.clear();
+  }
+}
 
 // ==================== CDP 输入事件 ====================
 
@@ -12,18 +35,58 @@ let useCdpInput = true;  // 使用 CDP 生成可信事件
  * 添加小数坐标，模拟真实鼠标位置
  */
 function addFloatJitter(value, maxJitter = 0.5) {
-  // 添加小数部分（真实鼠标坐标通常有小数）
-  const decimal = Math.random() * 0.99 + 0.01;  // 0.01 - 0.99
+  const decimal = Math.random() * 0.99 + 0.01;
   const jitter = (Math.random() - 0.5) * maxJitter;
   return value + decimal + jitter;
 }
 
 /**
- * 使用 CDP Input.dispatchMouseEvent 生成可信事件
- * 注意：使用 chrome.debugger 会在浏览器顶部显示警告条
+ * 确保 debugger 已附加（仅在 CDP 模式下）
+ */
+async function ensureDebuggerAttached(tabId) {
+  if (!cdpConfig.enabled) return false;
+
+  if (cdpConfig.attachedTabs.has(tabId)) return true;
+
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    cdpConfig.attachedTabs.add(tabId);
+    console.log('[XHS Bridge] Debugger attached to tab:', tabId);
+    return true;
+  } catch (e) {
+    if (!e.message.includes('already attached')) {
+      console.log('[XHS Bridge] Debugger attach failed:', e.message);
+      return false;
+    }
+    cdpConfig.attachedTabs.add(tabId);
+    return true;
+  }
+}
+
+/**
+ * 分离 debugger
+ */
+async function detachDebugger(tabId) {
+  try {
+    await chrome.debugger.detach({ tabId });
+    cdpConfig.attachedTabs.delete(tabId);
+  } catch {}
+}
+
+// 监听 debugger 分离事件
+chrome.debugger.onDetach.addListener((source, reason) => {
+  if (source.tabId) {
+    cdpConfig.attachedTabs.delete(source.tabId);
+  }
+  console.log('[XHS Bridge] Debugger detached:', reason);
+});
+
+/**
+ * CDP 鼠标移动（仅在启用 CDP 时工作）
  */
 async function cdpMouseMove(tabId, x, y) {
-  // 添加小数坐标
+  if (!cdpConfig.enabled || !cdpConfig.attachedTabs.has(tabId)) return false;
+
   const floatX = addFloatJitter(x);
   const floatY = addFloatJitter(y);
 
@@ -32,9 +95,12 @@ async function cdpMouseMove(tabId, x, y) {
     x: floatX,
     y: floatY,
   });
+  return true;
 }
 
 async function cdpMouseDown(tabId, x, y, button = 'left') {
+  if (!cdpConfig.enabled || !cdpConfig.attachedTabs.has(tabId)) return false;
+
   const floatX = addFloatJitter(x);
   const floatY = addFloatJitter(y);
 
@@ -45,9 +111,12 @@ async function cdpMouseDown(tabId, x, y, button = 'left') {
     button,
     clickCount: 1,
   });
+  return true;
 }
 
 async function cdpMouseUp(tabId, x, y, button = 'left') {
+  if (!cdpConfig.enabled || !cdpConfig.attachedTabs.has(tabId)) return false;
+
   const floatX = addFloatJitter(x);
   const floatY = addFloatJitter(y);
 
@@ -58,19 +127,24 @@ async function cdpMouseUp(tabId, x, y, button = 'left') {
     button,
     clickCount: 1,
   });
+  return true;
 }
 
+/**
+ * CDP 点击（生成 isTrusted=true 事件）
+ * 返回 true 表示成功，false 表示 CDP 不可用
+ */
 async function cdpClick(tabId, x, y) {
-  // 移动到目标位置
+  if (!cdpConfig.enabled) return false;
+
+  if (!await ensureDebuggerAttached(tabId)) return false;
+
   await cdpMouseMove(tabId, x, y);
   await new Promise(r => setTimeout(r, 50 + Math.random() * 50));
-
-  // 按下（坐标可能有微小变化）
   await cdpMouseDown(tabId, x, y);
   await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
-
-  // 释放（坐标可能有微小变化）
   await cdpMouseUp(tabId, x, y);
+  return true;
 }
 
 async function cdpMouseWheel(tabId, x, y, deltaX = 0, deltaY = 0) {
@@ -258,16 +332,20 @@ async function executeCommand(cmd) {
           chrome.tabs.onUpdated.addListener(listener);
         });
 
-        // 如果启用 CDP，附加 debugger
-        if (useCdpInput) {
-          try {
-            await ensureDebuggerAttached(activeTabId);
-          } catch (e) {
-            console.log('[XHS Bridge] Failed to attach debugger:', e.message);
-          }
-        }
-
         return { success: true, tabId: activeTabId };
+      }
+
+      // ==================== 配置命令 ====================
+
+      case 'setConfig': {
+        if (cmd.cdp !== undefined) {
+          setCdpMode(cmd.cdp);
+        }
+        return { success: true, cdp: cdpConfig.enabled };
+      }
+
+      case 'getConfig': {
+        return { success: true, cdp: cdpConfig.enabled };
       }
 
       case 'exec': {
@@ -314,25 +392,22 @@ async function executeCommand(cmd) {
         const tabId = cmd.tabId || activeTabId;
         if (!tabId) return { success: false, error: 'No active tab' };
 
-        // 优先使用 CDP（生成 isTrusted=true 事件）
-        if (useCdpInput && cmd.useCdp !== false) {
-          try {
-            await ensureDebuggerAttached(tabId);
-            await cdpClick(tabId, cmd.x, cmd.y);
-            return { success: true, method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP click failed, fallback to content script:', e.message);
+        // 如果启用 CDP 且命令要求使用 CDP
+        if (cdpConfig.enabled && cmd.useCdp === true) {
+          const cdpSuccess = await cdpClick(tabId, cmd.x, cmd.y);
+          if (cdpSuccess) {
+            return { success: true, method: 'cdp', isTrusted: true };
           }
         }
 
-        // 回退到 content script
+        // 默认使用 content script（无警告条）
         const response = await chrome.tabs.sendMessage(tabId, {
           action: 'humanClick',
           x: cmd.x,
           y: cmd.y,
           options: cmd.options,
         });
-        return { ...response, method: 'content' };
+        return { ...response, method: 'content', isTrusted: false };
       }
 
       case 'humanClickElement': {
@@ -360,34 +435,30 @@ async function executeCommand(cmd) {
           return { success: false, error: 'Element not found or not visible' };
         }
 
-        // 使用 CDP 点击
-        if (useCdpInput && cmd.useCdp !== false) {
-          try {
-            await ensureDebuggerAttached(tabId);
-            await cdpClick(tabId, pos.x, pos.y);
-            return { success: true, method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP click failed, fallback:', e.message);
+        // 如果明确要求使用 CDP
+        if (cdpConfig.enabled && cmd.useCdp === true) {
+          const cdpSuccess = await cdpClick(tabId, pos.x, pos.y);
+          if (cdpSuccess) {
+            return { success: true, method: 'cdp', isTrusted: true };
           }
         }
 
-        // 回退到 content script
+        // 默认使用 content script
         const response = await chrome.tabs.sendMessage(tabId, {
           action: 'humanClickElement',
           selector: cmd.selector,
         });
-        return { ...response, method: 'content' };
+        return { ...response, method: 'content', isTrusted: false };
       }
 
       case 'humanType': {
         const tabId = cmd.tabId || activeTabId;
         if (!tabId) return { success: false, error: 'No active tab' };
 
-        // 优先使用 CDP
-        if (useCdpInput && cmd.useCdp !== false) {
-          try {
-            await ensureDebuggerAttached(tabId);
-
+        // 如果明确要求使用 CDP
+        if (cdpConfig.enabled && cmd.useCdp === true) {
+          const attached = await ensureDebuggerAttached(tabId);
+          if (attached) {
             // 先点击元素聚焦
             if (cmd.selector) {
               const posResult = await chrome.scripting.executeScript({
@@ -408,38 +479,24 @@ async function executeCommand(cmd) {
             }
 
             await cdpType(tabId, cmd.text);
-            return { success: true, method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP type failed, fallback:', e.message);
+            return { success: true, method: 'cdp', isTrusted: true };
           }
         }
 
-        // 回退到 content script
+        // 默认使用 content script
         const response = await chrome.tabs.sendMessage(tabId, {
           action: 'humanType',
           selector: cmd.selector,
           text: cmd.text,
         });
-        return { ...response, method: 'content' };
+        return { ...response, method: 'content', isTrusted: false };
       }
 
       case 'humanScroll': {
         const tabId = cmd.tabId || activeTabId;
         if (!tabId) return { success: false, error: 'No active tab' };
 
-        // 优先使用 CDP
-        if (useCdpInput && cmd.useCdp !== false) {
-          try {
-            await ensureDebuggerAttached(tabId);
-            const deltaY = cmd.direction === 'up' ? -cmd.amount : cmd.amount;
-            await cdpMouseWheel(tabId, 0, 0, 0, deltaY);
-            return { success: true, method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP scroll failed, fallback:', e.message);
-          }
-        }
-
-        // 回退到 content script
+        // 滚动通常不需要 isTrusted，直接用 content script
         const response = await chrome.tabs.sendMessage(tabId, {
           action: 'humanScroll',
           direction: cmd.direction,
@@ -452,26 +509,7 @@ async function executeCommand(cmd) {
         const tabId = cmd.tabId || activeTabId;
         if (!tabId) return { success: false, error: 'No active tab' };
 
-        // 随机滚动使用 CDP
-        if (useCdpInput && cmd.useCdp !== false) {
-          try {
-            await ensureDebuggerAttached(tabId);
-            const duration = cmd.durationMs || 5000;
-            const startTime = Date.now();
-
-            while (Date.now() - startTime < duration) {
-              const direction = Math.random() > 0.3 ? 1 : -1;
-              const amount = 100 + Math.random() * 300;
-              await cdpMouseWheel(tabId, 0, 0, 0, direction * amount);
-              await new Promise(r => setTimeout(r, 300 + Math.random() * 700));
-            }
-            return { success: true, method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP random scroll failed, fallback:', e.message);
-          }
-        }
-
-        // 回退到 content script
+        // 滚动不需要 CDP
         const response = await chrome.tabs.sendMessage(tabId, {
           action: 'randomScroll',
           durationMs: cmd.durationMs,
@@ -505,22 +543,9 @@ async function executeCommand(cmd) {
         if (!pos) return { success: false, error: '未找到点赞按钮' };
         if (pos.alreadyLiked) return { success: false, error: '已经点赞过了' };
 
-        // 使用 CDP 点击
-        if (useCdpInput) {
-          try {
-            await ensureDebuggerAttached(tabId);
-            // 随机思考时间
-            await new Promise(r => setTimeout(r, 200 + Math.random() * 500));
-            await cdpClick(tabId, pos.x, pos.y);
-            return { success: true, message: '点赞成功', method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP like failed, fallback:', e.message);
-          }
-        }
-
-        // 回退到 content script
+        // 默认使用 content script（无警告条）
         const response = await chrome.tabs.sendMessage(tabId, { action: 'xhsLike' });
-        return { ...response, method: 'content' };
+        return { ...response, method: 'content', isTrusted: false };
       }
 
       case 'xhsCollect': {
@@ -547,126 +572,28 @@ async function executeCommand(cmd) {
         if (!pos) return { success: false, error: '未找到收藏按钮' };
         if (pos.alreadyCollected) return { success: false, error: '已经收藏过了' };
 
-        // 使用 CDP 点击
-        if (useCdpInput) {
-          try {
-            await ensureDebuggerAttached(tabId);
-            await new Promise(r => setTimeout(r, 200 + Math.random() * 500));
-            await cdpClick(tabId, pos.x, pos.y);
-            return { success: true, message: '收藏成功', method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP collect failed, fallback:', e.message);
-          }
-        }
-
-        // 回退到 content script
+        // 默认使用 content script
         const response = await chrome.tabs.sendMessage(tabId, { action: 'xhsCollect' });
-        return { ...response, method: 'content' };
+        return { ...response, method: 'content', isTrusted: false };
       }
 
       case 'xhsComment': {
         const tabId = cmd.tabId || activeTabId;
         if (!tabId) return { success: false, error: 'No active tab' };
 
-        // 使用 CDP 完成评论流程
-        if (useCdpInput) {
-          try {
-            await ensureDebuggerAttached(tabId);
-
-            // 获取评论按钮并点击
-            const chatPos = await chrome.scripting.executeScript({
-              target: { tabId },
-              func: () => {
-                const btn = document.querySelector('.chat-wrapper');
-                if (!btn) return null;
-                const rect = btn.getBoundingClientRect();
-                return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-              },
-            });
-
-            if (chatPos[0]?.result) {
-              await cdpClick(tabId, chatPos[0].result.x, chatPos[0].result.y);
-              await new Promise(r => setTimeout(r, 800 + Math.random() * 700));
-            }
-
-            // 获取输入框并点击
-            const inputPos = await chrome.scripting.executeScript({
-              target: { tabId },
-              func: () => {
-                const input = document.querySelector('#content-textarea, [contenteditable="true"]');
-                if (!input) return null;
-                input.focus();
-                const rect = input.getBoundingClientRect();
-                return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-              },
-            });
-
-            if (!inputPos[0]?.result) {
-              return { success: false, error: '未找到评论输入框' };
-            }
-
-            await cdpClick(tabId, inputPos[0].result.x, inputPos[0].result.y);
-            await new Promise(r => setTimeout(r, 200 + Math.random() * 200));
-
-            // 输入评论
-            await cdpType(tabId, cmd.text);
-            await new Promise(r => setTimeout(r, 300 + Math.random() * 300));
-
-            // 点击发送
-            const submitPos = await chrome.scripting.executeScript({
-              target: { tabId },
-              func: () => {
-                const btn = document.querySelector('button.btn.submit, [class*="submit"]');
-                if (!btn) return null;
-                const rect = btn.getBoundingClientRect();
-                return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-              },
-            });
-
-            if (submitPos[0]?.result) {
-              await cdpClick(tabId, submitPos[0].result.x, submitPos[0].result.y);
-              return { success: true, message: '评论已发送', method: 'cdp' };
-            }
-
-            return { success: false, error: '未找到发送按钮' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP comment failed, fallback:', e.message);
-          }
-        }
-
-        // 回退到 content script
+        // 默认使用 content script
         const response = await chrome.tabs.sendMessage(tabId, {
           action: 'xhsComment',
           text: cmd.text,
         });
-        return { ...response, method: 'content' };
+        return { ...response, method: 'content', isTrusted: false };
       }
 
       case 'xhsBrowseNote': {
         const tabId = cmd.tabId || activeTabId;
         if (!tabId) return { success: false, error: 'No active tab' };
 
-        // 使用 CDP 随机滚动浏览
-        if (useCdpInput) {
-          try {
-            await ensureDebuggerAttached(tabId);
-            const duration = cmd.durationMs || 10000;
-            const startTime = Date.now();
-
-            while (Date.now() - startTime < duration) {
-              // 70% 向下，30% 向上
-              const direction = Math.random() > 0.3 ? 1 : -1;
-              const amount = 100 + Math.random() * 400;
-              await cdpMouseWheel(tabId, 0, 0, 0, direction * amount);
-              await new Promise(r => setTimeout(r, 500 + Math.random() * 1500));
-            }
-            return { success: true, method: 'cdp' };
-          } catch (e) {
-            console.log('[XHS Bridge] CDP browse failed, fallback:', e.message);
-          }
-        }
-
-        // 回退到 content script
+        // 滚动浏览不需要 CDP
         const response = await chrome.tabs.sendMessage(tabId, {
           action: 'xhsBrowseNote',
           durationMs: cmd.durationMs,

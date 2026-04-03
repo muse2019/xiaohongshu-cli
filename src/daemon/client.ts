@@ -51,6 +51,23 @@ export async function sendCommand(action: string, params: Record<string, any> = 
   return await response.json();
 }
 
+// ==================== 配置 ====================
+
+/**
+ * 设置 CDP 模式（isTrusted=true 事件）
+ * @param enabled - 是否启用 CDP（会产生浏览器警告条）
+ */
+export async function setCdpMode(enabled: boolean): Promise<{ cdp: boolean }> {
+  return await sendCommand('setConfig', { cdp: enabled });
+}
+
+/**
+ * 获取当前配置
+ */
+export async function getConfig(): Promise<{ cdp: boolean }> {
+  return await sendCommand('getConfig');
+}
+
 // ==================== 便捷方法 ====================
 
 /**

@@ -347,5 +347,124 @@
     disguise(AudioContext.prototype.createAnalyser, 'createAnalyser');
   } catch {}
 
+  // ========== 17. DevTools 检测防护 ==========
+
+  // 防止通过 debugger 语句检测
+  // 网站用 performance.now() 测量 debugger 执行时间
+  try {
+    const origNow = performance.now.bind(performance);
+    let lastNow = origNow();
+    let callCount = 0;
+
+    // 重写 performance.now，返回的时间不能突变
+    performance.now = function() {
+      const realNow = origNow();
+      callCount++;
+
+      // 防止时间倒流
+      if (realNow < lastNow) {
+        return lastNow;
+      }
+
+      // 如果两次调用之间时间跳跃太大（可能是 debugger 暂停），平滑处理
+      const delta = realNow - lastNow;
+      if (delta > 100 && callCount < 1000) {
+        // 返回一个合理的增量
+        lastNow = lastNow + Math.min(delta, 50);
+        return lastNow;
+      }
+
+      lastNow = realNow;
+      return realNow;
+    };
+    disguise(performance.now, 'now');
+  } catch {}
+
+  // 防止通过 console.log 的 getter 检测 DevTools
+  try {
+    const devtoolsDetector = /./;
+    let detectorOpened = false;
+
+    Object.defineProperty(devtoolsDetector, 'toString', {
+      get: function() {
+        // 不设置 opened 标记
+        return function() { return ''; };
+      }
+    });
+
+    // 阻止常见的 DevTools 检测模式
+    const origLog = console.log;
+    console.log = function(...args) {
+      // 检查是否有检测器
+      for (const arg of args) {
+        if (arg && typeof arg === 'object' && 'opened' in arg) {
+          // 伪造 opened 为 false
+          Object.defineProperty(arg, 'opened', {
+            value: false,
+            configurable: true
+          });
+        }
+      }
+      return origLog.apply(console, args);
+    };
+    disguise(console.log, 'log');
+  } catch {}
+
+  // 防止通过 window 尺寸检测 DevTools
+  // DevTools 打开时 window.outerWidth 会变化
+  try {
+    const cachedOuterWidth = window.outerWidth || window.innerWidth;
+    const cachedOuterHeight = window.outerHeight || window.innerHeight + 100;
+
+    Object.defineProperty(window, 'outerWidth', {
+      get: function() {
+        // 如果 DevTools 实际关闭，返回真实值
+        const realOuter = window.outerWidth;
+        // 返回与 innerWidth 的合理差值
+        return Math.max(realOuter, window.innerWidth);
+      },
+      configurable: true
+    });
+
+    Object.defineProperty(window, 'outerHeight', {
+      get: function() {
+        const realOuter = window.outerHeight;
+        // DevTools 打开时 outerHeight 会变小
+        // 我们返回一个合理的值
+        const minExpected = window.innerHeight + 50;
+        return Math.max(realOuter, minExpected);
+      },
+      configurable: true
+    });
+  } catch {}
+
+  // 防止通过 Function 构造函数检测
+  try {
+    const origFunction = Function;
+    const fnToString = origFunction.prototype.toString;
+
+    // 检测 body 是否包含可疑代码
+    origFunction.prototype.toString = function() {
+      const str = fnToString.call(this);
+      // 如果函数体内包含检测代码，返回正常的函数体
+      if (str.includes('debugger') && str.includes('constructor')) {
+        return 'function() { [native code] }';
+      }
+      return str;
+    };
+  } catch {}
+
+  // ========== 18. 防止时间戳指纹 ==========
+  try {
+    // Date.now() 和 performance.now() 返回值添加微弱随机性
+    const origDateNow = Date.now.bind(Date);
+    let timeOffset = Math.random() * 0.5 - 0.25;  // -0.25 到 0.25 ms
+
+    Date.now = function() {
+      return Math.floor(origDateNow() + timeOffset);
+    };
+    disguise(Date.now, 'now');
+  } catch {}
+
   console.log('[XHS Stealth] Anti-detection applied');
 })();

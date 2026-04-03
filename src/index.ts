@@ -94,6 +94,37 @@ daemon
     }
   });
 
+// ==================== Config 命令 ====================
+
+const config = program
+  .command('config')
+  .description('配置管理');
+
+config
+  .command('cdp')
+  .argument('<on|off>', 'Enable or disable CDP mode')
+  .description('启用/禁用 CDP 模式（isTrusted=true 事件，会产生浏览器警告条）')
+  .action(async (mode: string) => {
+    const enabled = mode === 'on' || mode === 'true' || mode === '1';
+    const result = await daemonClient.setCdpMode(enabled);
+    console.log(chalk.green(`✓ CDP 模式已${enabled ? '启用' : '禁用'}`));
+    if (enabled) {
+      console.log(chalk.yellow('  注意：浏览器顶部将显示"扩展正在调试此浏览器"警告条'));
+    }
+  });
+
+config
+  .command('show')
+  .description('显示当前配置')
+  .action(async () => {
+    const cfg = await daemonClient.getConfig();
+    console.log(chalk.bold('\n当前配置:'));
+    console.log(`  CDP 模式: ${cfg.cdp ? chalk.green('启用') : chalk.dim('禁用')}`);
+    if (cfg.cdp) {
+      console.log(chalk.yellow('  ⚠️ CDP 模式会产生浏览器警告条'));
+    }
+  });
+
 // ==================== Operate 命令 ====================
 
 const operate = program
