@@ -186,7 +186,7 @@ export class BridgePage {
    * 执行 JavaScript
    */
   async evaluate<R>(code: string): Promise<R> {
-    return await client.exec(code);
+    return await client.exec(code, this.activeTabId || undefined);
   }
 
   /**

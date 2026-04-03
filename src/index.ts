@@ -400,7 +400,7 @@ xiaohongshu
 xiaohongshu
   .command('view')
   .argument('<number>', '笔记编号 (从 feed 列表中选择)')
-  .description('查看指定编号的笔记详情')
+  .description('查看指定编号的笔记详情（在当前页面点击打开）')
   .action(async (num: string) => {
     const feedCache = readFeedCache();
     const index = parseInt(num, 10) - 1;
@@ -411,57 +411,424 @@ xiaohongshu
     }
 
     const note = feedCache[index];
-    console.log(chalk.dim(`打开笔记: ${note.title.slice(0, 30)}...`));
+    console.log(chalk.dim(`点击笔记 [${num}]: ${note.title.slice(0, 30)}...`));
 
     const page = await getBridgePage();
-    await page.goto(note.url);
-    await page.wait(2);
 
-    // 获取笔记详情
-    const info = await page.evaluate(`
+    // 检查当前页面是否在 feed 页面，如果不在则导航过去
+    const currentUrl = await page.evaluate(`location.href`) as string;
+    const isOnFeedPage = currentUrl?.includes('xiaohongshu.com/explore') || currentUrl?.includes('xiaohongshu.com/?');
+
+    if (!isOnFeedPage) {
+      console.log(chalk.dim('导航到首页...'));
+      await page.goto('https://www.xiaohongshu.com/explore');
+      await page.wait(3);
+    }
+
+    // 第一步：找到卡片并滚动到可见位置
+    const cardInfo = await page.evaluate(`
       (() => {
-        const title = document.querySelector('.title, [class*="title"]')?.textContent?.trim() || '';
-        const desc = document.querySelector('.desc, .note-text, [class*="content"]')?.textContent?.trim() || '';
-        const author = document.querySelector('.author-wrapper .username, [class*="author"] [class*="name"]')?.textContent?.trim() || '';
-        const likeBtn = document.querySelector('.like-wrapper');
-        const collectBtn = document.querySelector('.collect-wrapper');
+        const allCards = document.querySelectorAll('section a[href*="/explore/"]');
+        const cards = Array.from(allCards);
 
-        // 获取图片
-        const images = [];
-        document.querySelectorAll('[class*="carousel"] img, [class*="swiper"] img').forEach(img => {
-          if (img.src) images.push(img.src);
+        if (cards.length === 0) {
+          return { success: false, error: '页面未加载完成' };
+        }
+
+        // 去重
+        const seen = new Set();
+        const uniqueCards = [];
+        cards.forEach(c => {
+          const href = c.getAttribute('href') || '';
+          const match = href.match(/explore\\/([a-f0-9]+)/);
+          if (match && !seen.has(match[1])) {
+            seen.add(match[1]);
+            uniqueCards.push(c);
+          }
         });
 
-        // 获取标签
-        const tags = [];
-        document.querySelectorAll('[class*="tag"] a, a[href*="/search_result"]').forEach(tag => {
-          const text = tag.textContent?.trim();
-          if (text && text.startsWith('#')) tags.push(text);
+        let targetCard = null;
+        let foundIndex = -1;
+
+        // 先尝试通过 ID 查找
+        for (let i = 0; i < uniqueCards.length; i++) {
+          const card = uniqueCards[i];
+          const href = card.getAttribute('href') || '';
+          const match = href.match(/explore\\/([a-f0-9]+)/);
+          if (match && match[1] === '${note.id}') {
+            targetCard = card;
+            foundIndex = i;
+            break;
+          }
+        }
+
+        // 如果通过 ID 找不到，按索引选择
+        if (!targetCard && ${index} < uniqueCards.length) {
+          targetCard = uniqueCards[${index}];
+          foundIndex = ${index};
+        }
+
+        if (!targetCard) {
+          return { success: false, error: '未找到笔记卡片' };
+        }
+
+        // 滚动到卡片位置
+        targetCard.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+        return { success: true, foundIndex, totalCards: uniqueCards.length };
+      })()
+    `);
+
+    if (!(cardInfo as any)?.success) {
+      console.error(chalk.red(`✗ ${(cardInfo as any)?.error || '获取卡片失败'}`));
+      return;
+    }
+
+    // 等待滚动完成
+    await page.wait(0.5);
+
+    // 第二步：获取卡片位置并用真人行为点击
+    const position = await page.evaluate(`
+      (() => {
+        const allCards = document.querySelectorAll('section a[href*="/explore/"]');
+        const cards = Array.from(allCards);
+
+        const seen = new Set();
+        const uniqueCards = [];
+        cards.forEach(c => {
+          const href = c.getAttribute('href') || '';
+          const match = href.match(/explore\\/([a-f0-9]+)/);
+          if (match && !seen.has(match[1])) {
+            seen.add(match[1]);
+            uniqueCards.push(c);
+          }
         });
+
+        const targetCard = uniqueCards[${(cardInfo as any).foundIndex}];
+        if (!targetCard) {
+          return { success: false, error: '卡片消失' };
+        }
+
+        // 再次滚动到可见
+        targetCard.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+        const rect = targetCard.getBoundingClientRect();
+
+        // 如果宽高为0，尝试找父元素
+        let finalRect = rect;
+        if (rect.width === 0 || rect.height === 0) {
+          const parent = targetCard.closest('section') || targetCard.parentElement;
+          if (parent) {
+            finalRect = parent.getBoundingClientRect();
+          }
+        }
+
+        // 如果还在视口外，返回失败
+        if (finalRect.width === 0 || finalRect.height === 0 || finalRect.top < 0 || finalRect.bottom > window.innerHeight) {
+          // 最后尝试：计算绝对位置
+          const absX = finalRect.left + finalRect.width / 2;
+          const absY = finalRect.top + finalRect.height / 2 + window.scrollY;
+
+          // 确保坐标在屏幕内
+          if (absX > 0 && absX < window.innerWidth && finalRect.height > 0) {
+            return {
+              success: true,
+              x: Math.round(absX),
+              y: Math.round(Math.max(100, Math.min(finalRect.top + finalRect.height / 2, window.innerHeight - 100)))
+            };
+          }
+
+          return { success: false, error: '卡片不可见' };
+        }
 
         return {
-          title,
-          desc: desc.slice(0, 500),
-          author,
-          liked: likeBtn?.classList.contains('like-active') || false,
-          collected: collectBtn?.classList.contains('collect-active') || false,
-          images,
-          tags: tags.slice(0, 10),
+          success: true,
+          x: Math.round(finalRect.left + finalRect.width / 2),
+          y: Math.round(finalRect.top + finalRect.height / 2)
         };
       })()
     `);
 
-    console.log(chalk.bold(`\n${(info as any).title}`));
-    console.log(chalk.dim(`作者: ${(info as any).author}`));
-    console.log(chalk.dim(`图片: ${(info as any).images?.length || 0} 张`));
-
-    if ((info as any).tags?.length) {
-      console.log(chalk.dim(`标签: ${(info as any).tags.join(' ')}`));
+    if (!(position as any)?.success) {
+      console.error(chalk.red(`✗ ${(position as any)?.error || '获取位置失败'}`));
+      console.log(chalk.dim('提示: 请运行 xhs xiaohongshu refresh 刷新页面'));
+      return;
     }
 
-    console.log(chalk.dim(`\n内容:\n${(info as any).desc}`));
+    const x = (position as any).x;
+    const y = (position as any).y;
+
+    console.log(chalk.dim(`点击坐标: (${x}, ${y})`));
+
+    // 使用真人行为点击
+    const clickResult = await daemonClient.humanClick(x, y);
+
+    if (!clickResult.success) {
+      console.error(chalk.red(`✗ ${clickResult.error || '点击失败'}`));
+      return;
+    }
+
+    // 等待弹窗出现
+    await page.wait(2);
+
+    // 获取弹窗中的笔记内容
+    const info = await page.evaluate(`
+      (() => {
+        // 找到笔记弹窗容器
+        const noteContainer = document.querySelector('[class*="noteContainer"]')
+          || document.querySelector('[class*="note-detail"]')
+          || document.querySelector('[role="dialog"]')
+          || document.body;
+
+        // 标题
+        let title = '';
+        const titleSelectors = ['[class*="title"]', 'h1', '[class*="noteContent"] [class*="title"]'];
+        for (const sel of titleSelectors) {
+          const el = noteContainer.querySelector(sel);
+          if (el?.textContent?.trim()) {
+            title = el.textContent.trim();
+            break;
+          }
+        }
+
+        // 内容
+        let desc = '';
+        const descSelectors = ['[class*="desc"]', '[class*="content"]', '[class*="note-text"]'];
+        for (const sel of descSelectors) {
+          const el = noteContainer.querySelector(sel);
+          if (el?.textContent?.trim() && el.textContent.length > 20) {
+            desc = el.textContent.trim();
+            break;
+          }
+        }
+
+        // 作者
+        let author = '';
+        const authorEl = noteContainer.querySelector('[class*="author"] [class*="name"], [class*="userName"]');
+        if (authorEl) author = authorEl.textContent?.trim() || '';
+
+        // 图片数量
+        const images = noteContainer.querySelectorAll('img');
+        const imgCount = images.length;
+
+        // 点赞/收藏状态
+        const likeBtn = noteContainer.querySelector('.like-wrapper, [class*="like"]');
+        const collectBtn = noteContainer.querySelector('.collect-wrapper, [class*="collect"]');
+
+        return {
+          title: title.slice(0, 100),
+          desc: desc.slice(0, 500),
+          author,
+          imgCount,
+          liked: likeBtn?.classList.contains('like-active') || likeBtn?.classList.contains('active') || false,
+          collected: collectBtn?.classList.contains('collect-active') || collectBtn?.classList.contains('active') || false,
+        };
+      })()
+    `);
+
+    console.log(chalk.bold(`\n${(info as any).title || '(无标题)'}`));
+    console.log(chalk.dim(`作者: ${(info as any).author || '(未知)'}`));
+    console.log(chalk.dim(`图片: ${(info as any).imgCount || 0} 张`));
+
+    if ((info as any).desc && (info as any).desc.length > 10) {
+      console.log(chalk.dim(`\n内容:\n${(info as any).desc}`));
+    }
 
     console.log(chalk.dim(`\n状态: ${(info as any).liked ? '已点赞' : '未点赞'} | ${(info as any).collected ? '已收藏' : '未收藏'}`));
+    console.log(chalk.dim('\n提示: xhs xiaohongshu like/collect 点赞收藏，xhs xiaohongshu back 返回'));
+  });
+
+xiaohongshu
+  .command('back')
+  .description('关闭笔记弹窗，返回 feed 列表并刷新索引')
+  .action(async () => {
+    const page = await getBridgePage();
+
+    // 尝试关闭弹窗
+    const result = await page.evaluate(`
+      (() => {
+        // 方法1: 找关闭按钮
+        const closeSelectors = [
+          '[class*="close"]',
+          '[aria-label="关闭"]',
+          '[class*="modal"] [class*="close"]',
+          '[class*="noteContainer"] [class*="close"]',
+          'button[class*="close"]'
+        ];
+
+        for (const sel of closeSelectors) {
+          const btn = document.querySelector(sel);
+          if (btn && btn.offsetParent !== null) {
+            btn.click();
+            return { success: true, method: 'click' };
+          }
+        }
+
+        // 方法2: 模拟 ESC 键
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+        document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+
+        // 方法3: 点击遮罩层（弹窗外区域）
+        const overlay = document.querySelector('[class*="mask"], [class*="overlay"]');
+        if (overlay) {
+          overlay.click();
+          return { success: true, method: 'overlay' };
+        }
+
+        return { success: true, method: 'esc' };
+      })()
+    `);
+
+    await page.wait(1);
+
+    // 检查是否成功关闭
+    const checkClosed = await page.evaluate(`
+      (() => {
+        const dialog = document.querySelector('[class*="noteContainer"], [role="dialog"]');
+        return { closed: !dialog || dialog.offsetParent === null };
+      })()
+    `);
+
+    if (!(checkClosed as any)?.closed) {
+      // 如果关闭失败，直接刷新页面回到 feed
+      console.log(chalk.yellow('弹窗未关闭，刷新页面...'));
+      await page.goto('https://www.xiaohongshu.com/explore');
+      await page.wait(2);
+    }
+
+    console.log(chalk.green('✓ 已返回 feed 列表'));
+
+    // 重新获取 feed 索引
+    console.log(chalk.dim('重新获取索引...'));
+    await page.wait(1);
+
+    // 滚动加载更多内容
+    for (let i = 0; i < 2; i++) {
+      await page.evaluate(`window.scrollBy(0, 500)`);
+      await page.wait(0.5);
+    }
+
+    const rawResults = await page.evaluate(`
+      (() => {
+        const notes = [];
+        document.querySelectorAll('a[href*="/explore/"]').forEach(el => {
+          const href = el.getAttribute('href') || '';
+          const match = href.match(/explore\\/([a-f0-9]+)/);
+          if (!match) return;
+
+          const card = el.closest('section') || el.closest('[class*="note-item"]') || el.parentElement?.parentElement;
+
+          let title = '';
+          const titleEl = card?.querySelector('[class*="title"], [class*="name"]');
+          if (titleEl) {
+            title = titleEl.textContent?.trim() || '';
+          } else {
+            title = el.getAttribute('title') || el.textContent?.trim().slice(0, 50) || '';
+          }
+
+          let author = '';
+          const authorEl = card?.querySelector('[class*="author"], [class*="name"]');
+          if (authorEl && authorEl !== titleEl) {
+            author = authorEl.textContent?.trim() || '';
+          }
+
+          notes.push({
+            id: match[1],
+            title: title.slice(0, 100),
+            author,
+            url: 'https://www.xiaohongshu.com/explore/' + match[1],
+          });
+        });
+
+        const seen = new Set();
+        return notes.filter(n => {
+          if (seen.has(n.id)) return false;
+          seen.add(n.id);
+          return true;
+        });
+      })()
+    `);
+
+    const feed = Array.isArray(rawResults) ? rawResults.slice(0, 20) : [];
+    writeFeedCache(feed);
+
+    console.log(chalk.dim(`索引已更新 (${feed.length} 条)`));
+    console.log(chalk.dim('运行 xhs xiaohongshu view <编号> 查看笔记'));
+  });
+
+xiaohongshu
+  .command('refresh')
+  .description('刷新 feed 页面并获取新列表')
+  .action(async () => {
+    const page = await getBridgePage();
+
+    console.log(chalk.dim('刷新页面...'));
+    await page.goto('https://www.xiaohongshu.com/explore');
+    await page.wait(3);
+
+    // 滚动加载更多内容
+    for (let i = 0; i < 2; i++) {
+      await page.evaluate(`window.scrollBy(0, 500)`);
+      await page.wait(0.5);
+    }
+
+    // 自动获取新的 feed
+    console.log(chalk.dim('获取新列表...'));
+    const rawResults = await page.evaluate(`
+      (() => {
+        const notes = [];
+        document.querySelectorAll('a[href*="/explore/"]').forEach(el => {
+          const href = el.getAttribute('href') || '';
+          const match = href.match(/explore\\/([a-f0-9]+)/);
+          if (!match) return;
+
+          const card = el.closest('section') || el.closest('[class*="note-item"]') || el.parentElement?.parentElement;
+
+          let title = '';
+          const titleEl = card?.querySelector('[class*="title"], [class*="name"]');
+          if (titleEl) {
+            title = titleEl.textContent?.trim() || '';
+          } else {
+            title = el.getAttribute('title') || el.textContent?.trim().slice(0, 50) || '';
+          }
+
+          let author = '';
+          const authorEl = card?.querySelector('[class*="author"], [class*="name"]');
+          if (authorEl && authorEl !== titleEl) {
+            author = authorEl.textContent?.trim() || '';
+          }
+
+          notes.push({
+            id: match[1],
+            title: title.slice(0, 100),
+            author,
+            url: 'https://www.xiaohongshu.com/explore/' + match[1],
+          });
+        });
+
+        const seen = new Set();
+        return notes.filter(n => {
+          if (seen.has(n.id)) return false;
+          seen.add(n.id);
+          return true;
+        });
+      })()
+    `);
+
+    const feed = Array.isArray(rawResults) ? rawResults.slice(0, 20) : [];
+    writeFeedCache(feed);
+
+    console.log(chalk.green('✓ 页面已刷新'));
+    console.log(chalk.bold(`\n首页 Feed (${feed.length} 条):\n`));
+    console.log(chalk.dim('提示: 使用 xhs xiaohongshu view <编号> 查看笔记详情\n'));
+    feed.forEach((item, i) => {
+      console.log(`  [${i + 1}] ${chalk.cyan(item.id)}`);
+      console.log(`      ${chalk.dim(item.title.slice(0, 40))}`);
+      if (item.author) {
+        console.log(`      ${chalk.dim('@' + item.author)}`);
+      }
+      console.log();
+    });
   });
 
 xiaohongshu

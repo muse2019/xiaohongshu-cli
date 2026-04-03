@@ -159,7 +159,7 @@ export class BridgePage {
      * 执行 JavaScript
      */
     async evaluate(code) {
-        return await client.exec(code);
+        return await client.exec(code, this.activeTabId || undefined);
     }
     /**
      * 滚动
