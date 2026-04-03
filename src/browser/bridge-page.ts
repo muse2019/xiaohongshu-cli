@@ -53,43 +53,19 @@ export class BridgePage {
     // 等待页面稳定
     await sleep(1000);
 
-    // 注入元素引用
-    await this.injectElementRefs();
-
     return result.url;
   }
 
   /**
-   * 注入元素引用标记
+   * 生成元素的稳定选择器（不修改 DOM）
+   * 使用 CSS 路径 + 特征哈希
    */
-  private async injectElementRefs(): Promise<void> {
-    await client.exec(`
-      (() => {
-        const selectors = [
-          'a', 'button', 'input', 'select', 'textarea',
-          '[role="button"]', '[role="link"]',
-          '[tabindex]:not([tabindex="-1"])',
-          '[contenteditable="true"]'
-        ];
-
-        const elements = document.querySelectorAll(selectors.join(', '));
-        let counter = 0;
-
-        elements.forEach(el => {
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            el.setAttribute('data-xhs-ref', String(counter));
-            counter++;
-          }
-        });
-
-        window.__xhs_element_count = counter;
-      })()
-    `);
+  private async getElementSelectors(): Promise<void> {
+    // 不再注入属性，改用实时计算
   }
 
   /**
-   * 获取页面状态
+   * 获取页面状态（不修改 DOM）
    */
   async getState(): Promise<{
     url: string;
@@ -102,16 +78,53 @@ export class BridgePage {
         const title = document.title;
         const elements = [];
 
-        document.querySelectorAll('[data-xhs-ref]').forEach(el => {
+        const selectors = [
+          'a', 'button', 'input', 'select', 'textarea',
+          '[role="button"]', '[role="link"]',
+          '[tabindex]:not([tabindex="-1"])',
+          '[contenteditable="true"]'
+        ];
+
+        const allElements = document.querySelectorAll(selectors.join(', '));
+        let counter = 0;
+
+        allElements.forEach(el => {
           const rect = el.getBoundingClientRect();
-          elements.push({
-            ref: el.getAttribute('data-xhs-ref'),
-            tag: el.tagName.toLowerCase(),
-            text: (el.textContent || '').trim().slice(0, 100),
-            attributes: Object.fromEntries(
-              Array.from(el.attributes).map(a => [a.name, a.value])
-            ),
-          });
+          if (rect.width > 0 && rect.height > 0) {
+            // 生成稳定的 CSS 路径作为 ref
+            const path = [];
+            let current = el;
+            while (current && current !== document.body) {
+              let selector = current.tagName.toLowerCase();
+              if (current.id) {
+                selector += '#' + current.id;
+                path.unshift(selector);
+                break;
+              }
+              const parent = current.parentElement;
+              if (parent) {
+                const siblings = Array.from(parent.children).filter(c => c.tagName === current.tagName);
+                if (siblings.length > 1) {
+                  const index = siblings.indexOf(current) + 1;
+                  selector += ':nth-of-type(' + index + ')';
+                }
+              }
+              path.unshift(selector);
+              current = parent;
+            }
+
+            elements.push({
+              ref: path.join(' > '),
+              tag: el.tagName.toLowerCase(),
+              text: (el.textContent || '').trim().slice(0, 100),
+              attributes: Object.fromEntries(
+                Array.from(el.attributes)
+                  .filter(a => !a.name.startsWith('data-xhs')) // 过滤掉可能存在的标记
+                  .map(a => [a.name, a.value])
+              ),
+            });
+            counter++;
+          }
         });
 
         return { url, title, elements };
@@ -122,13 +135,13 @@ export class BridgePage {
   }
 
   /**
-   * 点击元素
+   * 点击元素（使用 CSS 选择器）
    */
   async click(ref: string): Promise<void> {
     await client.exec(`
       (() => {
-        const el = document.querySelector('[data-xhs-ref="${ref}"]');
-        if (!el) throw new Error('Element not found: ${ref}');
+        const el = document.querySelector(${JSON.stringify(ref)});
+        if (!el) throw new Error('Element not found: ' + ${JSON.stringify(ref)});
         el.scrollIntoView({ behavior: 'instant', block: 'center' });
         el.click();
       })()
@@ -141,8 +154,8 @@ export class BridgePage {
   async type(ref: string, text: string): Promise<void> {
     await client.exec(`
       (() => {
-        const el = document.querySelector('[data-xhs-ref="${ref}"]');
-        if (!el) throw new Error('Element not found: ${ref}');
+        const el = document.querySelector(${JSON.stringify(ref)});
+        if (!el) throw new Error('Element not found: ' + ${JSON.stringify(ref)});
 
         el.focus();
 

@@ -132,17 +132,44 @@
 
   /**
    * 生成贝塞尔曲线控制点
+   * 根据移动距离动态调整参数，避免固定模式被检测
    */
   function generateBezierPoints(start, end, steps) {
-    // 随机生成两个控制点
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // 根据距离动态调整控制点偏移范围
+    // 距离越大，偏移范围越大，但不是线性关系
+    const baseOffset = Math.min(distance * 0.3, 100);
+    const offsetVariance = baseOffset * (0.5 + Math.random());
+
+    // 控制点位置参数也随机化，不总是固定在 0.2-0.4 和 0.6-0.8
+    const cp1Ratio = random(0.15, 0.45);
+    const cp2Ratio = random(0.55, 0.85);
+
+    // 计算移动方向的垂直向量，用于生成弧度
+    const angle = Math.atan2(dy, dx);
+    const perpX = -Math.sin(angle);
+    const perpY = Math.cos(angle);
+
+    // 弧度方向随机（向左弯或向右弯）
+    const arcDirection = Math.random() > 0.5 ? 1 : -1;
+    const arcAmount = random(0.1, 0.4) * distance * arcDirection;
+
+    // 偶尔生成"奇怪"的轨迹（模拟疲劳、分心）
+    const isErratic = Math.random() < 0.08;
+
+    // 控制点1
     const cp1 = {
-      x: start.x + (end.x - start.x) * random(0.2, 0.4) + random(-50, 50),
-      y: start.y + (end.y - start.y) * random(0.2, 0.4) + random(-50, 50),
+      x: start.x + dx * cp1Ratio + perpX * arcAmount * 0.5 + random(-offsetVariance, offsetVariance),
+      y: start.y + dy * cp1Ratio + perpY * arcAmount * 0.5 + random(-offsetVariance, offsetVariance),
     };
 
+    // 控制点2
     const cp2 = {
-      x: start.x + (end.x - start.x) * random(0.6, 0.8) + random(-50, 50),
-      y: start.y + (end.y - start.y) * random(0.6, 0.8) + random(-50, 50),
+      x: start.x + dx * cp2Ratio + perpX * arcAmount + random(-offsetVariance, offsetVariance),
+      y: start.y + dy * cp2Ratio + perpY * arcAmount + random(-offsetVariance, offsetVariance),
     };
 
     const points = [];
@@ -160,8 +187,16 @@
 
       // 添加随机抖动
       if (i > 0 && i < steps) {
-        x += random(-2, 2);
-        y += random(-2, 2);
+        // 基础抖动
+        const baseJitter = 1 + distance * 0.01;
+        x += random(-baseJitter, baseJitter);
+        y += random(-baseJitter, baseJitter);
+
+        // "奇怪"轨迹额外抖动
+        if (isErratic && Math.random() < 0.3) {
+          x += random(-8, 8);
+          y += random(-8, 8);
+        }
       }
 
       points.push({ x: Math.round(x), y: Math.round(y) });
@@ -178,9 +213,10 @@
     // 获取当前鼠标位置（使用隐蔽状态）
     const currentPos = _state.mousePos;
 
-    // 计算步数（基于距离）
+    // 计算步数（基于距离，添加随机性）
     const distance = Math.sqrt(Math.pow(x - currentPos.x, 2) + Math.pow(y - currentPos.y, 2));
-    const steps = Math.max(10, Math.min(30, Math.floor(distance / 20)));
+    const baseSteps = Math.floor(distance / (15 + random(5, 15)));
+    const steps = Math.max(8, Math.min(40, baseSteps));
 
     // 生成贝塞尔曲线路径
     const path = generateBezierPoints(currentPos, { x, y }, steps);
@@ -201,11 +237,25 @@
       // 更新记录的位置（隐蔽存储）
       _state.mousePos = point;
 
-      // 随机延迟（中间快，两头慢）
+      // 延迟计算：中间快，两头慢（加速-匀速-减速）
       const progress = i / path.length;
-      const speedFactor = Math.sin(progress * Math.PI);
-      const delay = randomDelay(15) * (1 + (1 - speedFactor) * 0.5);
-      await sleep(delay);
+      // 使用更自然的速度曲线
+      let speedFactor;
+      if (progress < 0.2) {
+        // 加速阶段
+        speedFactor = progress / 0.2;
+      } else if (progress > 0.8) {
+        // 减速阶段
+        speedFactor = (1 - progress) / 0.2;
+      } else {
+        // 匀速阶段
+        speedFactor = 1;
+      }
+      speedFactor = 0.3 + speedFactor * 0.7; // 确保最小速度
+
+      const baseDelay = 10 + distance * 0.05;
+      const delay = baseDelay / speedFactor + random(-3, 3);
+      await sleep(Math.max(5, delay));
     }
   }
 
