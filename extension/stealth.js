@@ -466,5 +466,218 @@
     disguise(Date.now, 'now');
   } catch {}
 
-  console.log('[XHS Stealth] Anti-detection applied');
+  // ========== 19. WebRTC IP 泄露保护 ==========
+  try {
+    // 阻止 WebRTC 泄露本地 IP
+    const rtcConfig = {
+      iceServers: []
+    };
+
+    // 修改 RTCPeerConnection
+    const OrigRTCPeerConnection = window.RTCPeerConnection;
+    if (OrigRTCPeerConnection) {
+      window.RTCPeerConnection = function(config, constraints) {
+        // 移除可能导致 IP 泄露的配置
+        const safeConfig = {
+          ...config,
+          iceServers: [],
+          iceCandidatePoolSize: 0
+        };
+        return new OrigRTCPeerConnection(safeConfig, constraints);
+      };
+      // 复制原型和静态属性
+      window.RTCPeerConnection.prototype = OrigRTCPeerConnection.prototype;
+      Object.setPrototypeOf(window.RTCPeerConnection, OrigRTCPeerConnection);
+      disguise(window.RTCPeerConnection, 'RTCPeerConnection');
+    }
+
+    // 阻止通过 webkitRTCPeerConnection 泄露
+    if (window.webkitRTCPeerConnection) {
+      window.webkitRTCPeerConnection = window.RTCPeerConnection;
+    }
+
+    // 阻止获取本地 IP 的方法
+    const origCreateDataChannel = RTCPeerConnection.prototype.createDataChannel;
+    RTCPeerConnection.prototype.createDataChannel = function() {
+      const channel = origCreateDataChannel.apply(this, arguments);
+      // 阻止 ICE 候选泄露
+      return channel;
+    };
+    disguise(RTCPeerConnection.prototype.createDataChannel, 'createDataChannel');
+  } catch {}
+
+  // ========== 20. Font 指纹保护 ==========
+  try {
+    // 随机化字体测量结果
+    const origMeasureText = CanvasRenderingContext2D.prototype.measureText;
+    CanvasRenderingContext2D.prototype.measureText = function(text) {
+      const result = origMeasureText.call(this, text);
+      // 添加微弱随机性
+      const noise = (Math.random() - 0.5) * 0.1;
+      const origWidth = result.width;
+
+      Object.defineProperty(result, 'width', {
+        get: function() {
+          return origWidth + noise;
+        },
+        configurable: true
+      });
+
+      return result;
+    };
+    disguise(CanvasRenderingContext2D.prototype.measureText, 'measureText');
+
+    // 伪装字体列表
+    const fakeFonts = [
+      'Arial', 'Arial Black', 'Comic Sans MS', 'Courier New', 'Georgia',
+      'Impact', 'Lucida Console', 'Lucida Sans Unicode', 'Palatino Linotype',
+      'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Microsoft YaHei',
+      'SimSun', 'SimHei', 'PingFang SC', 'Heiti SC', 'Songti SC'
+    ];
+
+    // 拦截 font 检测脚本常用的方法
+    const origGetComputedStyle = window.getComputedStyle;
+    window.getComputedStyle = function(element, pseudoElt) {
+      const style = origGetComputedStyle.call(window, element, pseudoElt);
+
+      // 如果正在检测字体，返回常见字体
+      const origFontFamily = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, 'fontFamily');
+      if (origFontFamily && origFontFamily.get) {
+        Object.defineProperty(style, 'fontFamily', {
+          get: function() {
+            const realFont = origFontFamily.get.call(this);
+            // 如果是检测元素，返回伪装的字体
+            if (element.id && element.id.includes('font')) {
+              return fakeFonts.join(', ');
+            }
+            return realFont;
+          },
+          configurable: true
+        });
+      }
+
+      return style;
+    };
+    disguise(window.getComputedStyle, 'getComputedStyle');
+  } catch {}
+
+  // ========== 21. 屏幕信息伪装 ==========
+  try {
+    // 常见的屏幕分辨率
+    const commonScreen = {
+      width: 1920,
+      height: 1080,
+      availWidth: 1920,
+      availHeight: 1040,
+      colorDepth: 24,
+      pixelDepth: 24
+    };
+
+    // 添加随机性使指纹不唯一
+    const screenNoise = {
+      width: Math.random() > 0.5 ? 0 : 1,
+      height: Math.random() > 0.5 ? 0 : 1
+    };
+
+    for (const prop of ['width', 'height', 'availWidth', 'availHeight', 'colorDepth', 'pixelDepth']) {
+      try {
+        Object.defineProperty(screen, prop, {
+          get: function() {
+            const base = commonScreen[prop] || 1920;
+            return base + (screenNoise[prop] || 0);
+          },
+          configurable: true
+        });
+      } catch {}
+    }
+
+    // devicePixelRatio 也是指纹
+    try {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        get: function() {
+          return 1;  // 最常见的值
+        },
+        configurable: true
+      });
+    } catch {}
+  } catch {}
+
+  // ========== 22. 硬件信息伪装 ==========
+  try {
+    // CPU 核心数
+    const commonCores = [4, 8, 16];
+    const fakeCores = commonCores[Math.floor(Math.random() * commonCores.length)];
+    Object.defineProperty(navigator, 'hardwareConcurrency', {
+      get: function() {
+        return fakeCores;
+      },
+      configurable: true
+    });
+
+    // 设备内存
+    const commonMemory = [4, 8, 16];
+    const fakeMemory = commonMemory[Math.floor(Math.random() * commonMemory.length)];
+    if ('deviceMemory' in navigator) {
+      try {
+        Object.defineProperty(navigator, 'deviceMemory', {
+          get: function() {
+            return fakeMemory;
+          },
+          configurable: true
+        });
+      } catch {}
+    }
+
+    // 电池状态
+    if (navigator.getBattery) {
+      navigator.getBattery = function() {
+        return Promise.resolve({
+          charging: true,
+          chargingTime: 0,
+          dischargingTime: Infinity,
+          level: 1
+        });
+      };
+      disguise(navigator.getBattery, 'getBattery');
+    }
+  } catch {}
+
+  // ========== 23. Touch 支持伪装 ==========
+  try {
+    // 伪装支持触摸（但不一定在用）
+    Object.defineProperty(navigator, 'maxTouchPoints', {
+      get: function() {
+        return 5;  // 常见的触摸点数量
+      },
+      configurable: true
+    });
+
+    // 添加 TouchEvent 构造函数
+    if (typeof TouchEvent === 'undefined') {
+      window.TouchEvent = function TouchEvent(type, eventInitDict) {
+        return new Event(type, eventInitDict);
+      };
+    }
+
+    // 添加 Touch 构造函数
+    if (typeof Touch === 'undefined') {
+      window.Touch = function Touch(touchInitDict) {
+        Object.assign(this, touchInitDict);
+      };
+    }
+
+    // 伪装 ontouchstart 等事件
+    const touchEvents = ['touchstart', 'touchmove', 'touchend', 'touchcancel'];
+    touchEvents.forEach(event => {
+      try {
+        Object.defineProperty(document, 'on' + event, {
+          get: function() { return null; },
+          set: function() {},
+          configurable: true
+        });
+      } catch {}
+    });
+  } catch {}
+
+  console.log('[XHS Stealth] Anti-detection applied (23 layers)');
 })();

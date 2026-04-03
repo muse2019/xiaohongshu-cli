@@ -15,17 +15,85 @@
     typingSpeed: 80,        // 打字基础速度 (ms/字符)
     scrollSpeed: 300,       // 滚动基础速度 (px/次)
     randomness: 0.3,        // 随机程度 (0-1)
+    behaviorNoise: true,    // 行为噪声（防止机器学习检测）
   };
 
   // ==================== 隐蔽状态存储 ====================
-  // 使用 WeakMap 代替全局变量，避免被检测
+  // 使用闭包变量，避免全局变量被检测
 
   const _state = {
     mousePos: { x: 100 + Math.random() * 400, y: 100 + Math.random() * 400 },
+    sessionStart: Date.now(),
+    actionCount: 0,
+    lastActionTime: 0,
   };
 
-  // 使用随机属性名进一步隐藏
-  const _obfuscatedKey = '_x' + Math.random().toString(36).slice(2, 8);
+  // ==================== 行为噪声生成器 ====================
+
+  /**
+   * 生成行为噪声，防止机器学习检测
+   */
+  const behaviorNoise = {
+    /**
+     * 生成随机微操作
+     * 在主要操作之间插入无意义的小动作
+     */
+    async randomMicroAction() {
+      if (!CONFIG.behaviorNoise) return;
+
+      // 5% 概率执行微操作
+      if (Math.random() < 0.05) {
+        const actions = [
+          // 随机移动一小段
+          async () => {
+            const offsetX = random(-20, 20);
+            const offsetY = random(-20, 20);
+            const newX = Math.max(0, _state.mousePos.x + offsetX);
+            const newY = Math.max(0, _state.mousePos.y + offsetY);
+            await humanMouseMove(newX, newY);
+          },
+          // 随机滚动一点点
+          async () => {
+            window.scrollBy(0, random(-30, 30));
+          },
+          // 短暂停顿（模拟思考）
+          async () => {
+            await sleep(random(100, 300));
+          }
+        ];
+        const action = actions[Math.floor(Math.random() * actions.length)];
+        await action();
+      }
+    },
+
+    /**
+     * 计算自适应延迟
+     * 根据会话时长和操作频率调整延迟
+     */
+    getAdaptiveDelay(baseMs) {
+      const sessionDuration = Date.now() - _state.sessionStart;
+      const actionsPerMinute = _state.actionCount / (sessionDuration / 60000);
+
+      // 如果操作太频繁，增加延迟
+      let multiplier = 1;
+      if (actionsPerMinute > 30) {
+        multiplier = 1 + (actionsPerMinute - 30) * 0.02;
+      }
+
+      // 随机变化
+      const noise = 1 + (Math.random() - 0.5) * 0.4;
+
+      return baseMs * multiplier * noise;
+    },
+
+    /**
+     * 记录操作
+     */
+    recordAction() {
+      _state.actionCount++;
+      _state.lastActionTime = Date.now();
+    }
+  };
 
   // ==================== 工具函数 ====================
 
@@ -37,11 +105,10 @@
   }
 
   /**
-   * 随机延迟
+   * 随机延迟（使用自适应延迟）
    */
   function randomDelay(baseMs) {
-    const variance = baseMs * CONFIG.randomness;
-    return baseMs + random(-variance, variance);
+    return behaviorNoise.getAdaptiveDelay(baseMs);
   }
 
   /**
@@ -236,10 +303,49 @@
   }
 
   /**
-   * 模拟真人点击（包含 PointerEvent）
+   * 创建 Touch 事件
+   */
+  function createTouch(x, y, identifier = 0) {
+    return new Touch({
+      identifier,
+      target: document.elementFromPoint(x, y) || document.body,
+      clientX: x,
+      clientY: y,
+      pageX: x + window.scrollX,
+      pageY: y + window.scrollY,
+      screenX: x,
+      screenY: y,
+      radiusX: 5,
+      radiusY: 5,
+      rotationAngle: 0,
+      force: 0.5
+    });
+  }
+
+  /**
+   * 创建 TouchEvent 事件参数
+   */
+  function createTouchEventInit(type, touches, changedTouches) {
+    return {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      detail: 0,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      touches: touches,
+      targetTouches: touches,
+      changedTouches: changedTouches
+    };
+  }
+
+  /**
+   * 模拟真人点击（包含 PointerEvent 和 TouchEvent）
    */
   async function humanClick(x, y, options = {}) {
-    const { doubleClick = false, moveFirst = true } = options;
+    const { doubleClick = false, moveFirst = true, withTouch = false } = options;
 
     // 随机页面外移动（模拟查看其他区域）
     await randomPageMove();
@@ -259,6 +365,20 @@
     const element = document.elementFromPoint(clickedPos.x, clickedPos.y);
     if (!element) {
       return { success: false, error: 'No element at position' };
+    }
+
+    // 如果需要 touch 事件（移动端网站）
+    if (withTouch) {
+      const touch = createTouch(clickedPos.x, clickedPos.y);
+      const touchStartInit = createTouchEventInit('touchstart', [touch], [touch]);
+      element.dispatchEvent(new TouchEvent('touchstart', touchStartInit));
+
+      await sleep(random(30, 80));
+
+      const touchEndInit = createTouchEventInit('touchend', [], [touch]);
+      element.dispatchEvent(new TouchEvent('touchend', touchEndInit));
+
+      await sleep(random(10, 30));
     }
 
     // pointerover -> pointerenter -> mouseover -> mouseenter
@@ -318,6 +438,10 @@
 
     // 点击后延迟
     await thinkTime(150, 400);
+
+    // 记录操作并可能执行微操作
+    behaviorNoise.recordAction();
+    await behaviorNoise.randomMicroAction();
 
     return { success: true };
   }
