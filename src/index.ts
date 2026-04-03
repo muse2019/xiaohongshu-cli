@@ -347,11 +347,11 @@ xiaohongshu
             cover = img.src || '';
           }
 
-          // 获取点赞数
+          // 获取点赞数 - 尝试多种选择器
           let likes = '';
-          const likeEl = card?.querySelector('[class*="like"], [class*="count"]');
-          if (likeEl) {
-            likes = likeEl.textContent?.trim() || '';
+          const countEl = card?.querySelector('[class*="count"], [class*="like"], [class*="data"], .count');
+          if (countEl) {
+            likes = countEl.textContent?.trim() || '';
           }
 
           notes.push({
@@ -392,6 +392,9 @@ xiaohongshu
       console.log(`      ${chalk.dim(item.title.slice(0, 40))}`);
       if (item.author) {
         console.log(`      ${chalk.dim('@' + item.author)}`);
+      }
+      if (item.likes) {
+        console.log(`      ${chalk.yellow('❤ ' + item.likes)}`);
       }
       console.log();
     });
@@ -645,6 +648,20 @@ xiaohongshu
         const images = noteContainer.querySelectorAll('img');
         const imgCount = images.length;
 
+        // 点赞数
+        let likes = '';
+        const likeCountEl = noteContainer.querySelector('.like-wrapper [class*="count"], .like-wrapper .count, [class*="likeCount"]');
+        if (likeCountEl) {
+          likes = likeCountEl.textContent?.trim() || '';
+        }
+
+        // 收藏数
+        let collects = '';
+        const collectCountEl = noteContainer.querySelector('.collect-wrapper [class*="count"], .collect-wrapper .count, [class*="collectCount"]');
+        if (collectCountEl) {
+          collects = collectCountEl.textContent?.trim() || '';
+        }
+
         // 点赞/收藏状态
         const likeBtn = noteContainer.querySelector('.like-wrapper, [class*="like"]');
         const collectBtn = noteContainer.querySelector('.collect-wrapper, [class*="collect"]');
@@ -654,6 +671,8 @@ xiaohongshu
           desc: desc.slice(0, 500),
           author,
           imgCount,
+          likes,
+          collects,
           liked: likeBtn?.classList.contains('like-active') || likeBtn?.classList.contains('active') || false,
           collected: collectBtn?.classList.contains('collect-active') || collectBtn?.classList.contains('active') || false,
         };
@@ -663,6 +682,9 @@ xiaohongshu
     console.log(chalk.bold(`\n${(info as any).title || '(无标题)'}`));
     console.log(chalk.dim(`作者: ${(info as any).author || '(未知)'}`));
     console.log(chalk.dim(`图片: ${(info as any).imgCount || 0} 张`));
+    if ((info as any).likes || (info as any).collects) {
+      console.log(chalk.dim(`互动: ${(info as any).likes || 0} 赞 · ${(info as any).collects || 0} 收藏`));
+    }
 
     if ((info as any).desc && (info as any).desc.length > 10) {
       console.log(chalk.dim(`\n内容:\n${(info as any).desc}`));
@@ -767,10 +789,18 @@ xiaohongshu
             author = authorEl.textContent?.trim() || '';
           }
 
+          // 获取点赞数
+          let likes = '';
+          const countEl = card?.querySelector('[class*="count"], [class*="like"], [class*="data"], .count');
+          if (countEl) {
+            likes = countEl.textContent?.trim() || '';
+          }
+
           notes.push({
             id: match[1],
             title: title.slice(0, 100),
             author,
+            likes,
             url: 'https://www.xiaohongshu.com/explore/' + match[1],
           });
         });
@@ -794,6 +824,9 @@ xiaohongshu
       console.log(`      ${chalk.dim(item.title.slice(0, 40))}`);
       if (item.author) {
         console.log(`      ${chalk.dim('@' + item.author)}`);
+      }
+      if (item.likes) {
+        console.log(`      ${chalk.yellow('❤ ' + item.likes)}`);
       }
       console.log();
     });
@@ -842,10 +875,18 @@ xiaohongshu
             author = authorEl.textContent?.trim() || '';
           }
 
+          // 获取点赞数
+          let likes = '';
+          const countEl = card?.querySelector('[class*="count"], [class*="like"], [class*="data"], .count');
+          if (countEl) {
+            likes = countEl.textContent?.trim() || '';
+          }
+
           notes.push({
             id: match[1],
             title: title.slice(0, 100),
             author,
+            likes,
             url: 'https://www.xiaohongshu.com/explore/' + match[1],
           });
         });
@@ -870,6 +911,9 @@ xiaohongshu
       console.log(`      ${chalk.dim(item.title.slice(0, 40))}`);
       if (item.author) {
         console.log(`      ${chalk.dim('@' + item.author)}`);
+      }
+      if (item.likes) {
+        console.log(`      ${chalk.yellow('❤ ' + item.likes)}`);
       }
       console.log();
     });
